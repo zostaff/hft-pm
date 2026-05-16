@@ -1,0 +1,37 @@
+# Example hft-pm strategy config.
+#
+# Token ids are 256-bit decimal strings; you get them from the
+# Polymarket gamma-api `clobTokenIds` field for the market you want.
+# fee_category must match one of the FeeCategory enum names (see
+# src/hft_pm/fees/polymarket.py). The strategy/risk values below are
+# defensible defaults — re-run `scripts/calibrate_strategy.py` against
+# your own capture to refine sigma/kappa/alpha_beta.
+
+market:
+  # Pistons vs Cavaliers (sports, vol24h ≈ $4.8M). Real token id from
+  # the 2026-05-16 Polymarket gamma-api snapshot.
+  token_id: "61329423403258718865520065423477646734746215825414612058431614589236294556849"
+  fee_category: SPORTS
+  tick: 0.01
+
+strategy:
+  kind: avellaneda_stoikov_with_signals
+  params:
+    gamma: 1.0
+    sigma: 0.005           # per √second; calibrate with scripts/calibrate_strategy.py
+    kappa: 60.0            # 1 / price-unit
+    horizon_ms: 3600000    # 1 hour
+    size: 1
+    use_microprice: true
+    ofi_window_s: 2.0      # rolling window for OFI accumulator
+    alpha_beta: 5.0e-7     # price-units per OFI-unit; calibrated value
+    vpin_bucket_volume: 100.0
+    vpin_n_buckets: 20
+    vpin_max: 3.0          # withdraw both sides when VPIN exceeds this
+
+risk:
+  max_drawdown_pct: 0.20   # halt at 20% drawdown from peak (CLAUDE.md rule)
+  max_inventory: 50        # contracts; tighten before live
+  heartbeat_timeout_s: 30  # halt if WS silent for 30 s (CLAUDE.md rule)
+  daily_loss_limit: 25     # dollars; null disables
+  baseline_capital: 100    # dollars; reference for drawdown when peak < baseline
