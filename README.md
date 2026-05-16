@@ -2,10 +2,13 @@
 
 Framework / scaffold for an HFT market-making bot on prediction markets
 (Polymarket V2 primary). Phases 1-6 of the roadmap in
-[`CLAUDE.md`](CLAUDE.md) are implemented: WebSocket data capture,
-event-driven simulator, Avellaneda-Stoikov + GLT quoting, OFI /
-microprice / VPIN signals, Hawkes-based event-driven extensions, and
-the full purged-CV / DSR / PBO / delay / shuffle validation suite.
+[`CLAUDE.md`](CLAUDE.md) are implemented, plus a Tier 1 risk / config /
+calibration layer and a Tier 2 paper-trading runner: WebSocket data
+capture, event-driven simulator, Avellaneda-Stoikov + GLT quoting,
+OFI / microprice / VPIN signals, Hawkes-based event-driven extensions,
+the full purged-CV / DSR / PBO / delay / shuffle validation suite, a
+`KillSwitch` with the four CLAUDE.md halt rules, and a live-WS paper
+trader that simulates fills against a local L2 book.
 
 The theoretical contract is in
 [`docs/hft_prediction_markets_EN.md`](docs/hft_prediction_markets_EN.md);
@@ -33,6 +36,12 @@ read it before reading code.
   daily-loss-limit, and per-side inventory cap (CLAUDE.md rule #9).
 - **CLIs**: end-to-end calibrate + backtest scripts driven by a single
   YAML config.
+- **Paper-trade runner**: `PaperTrader` subscribes to the live Polymarket
+  market channel, maintains a local L2 book, runs the configured
+  strategy against it, simulates fills via `L2OrderBook.process_trade`
+  when public trades hit our resting levels, and writes a per-event
+  JSONL audit trail. Same `SimulatorAPI` surface as the backtester, so
+  strategies are plug-compatible.
 
 ## What's **NOT** included
 
@@ -41,8 +50,6 @@ read it before reading code.
 - **No real-data validation.** All acceptance tests run on synthetic
   data we generate ourselves. The validation suite is ready; real data
   has not been fed through it.
-- **No paper-trading runner.** The pieces are there (WS client + L2 book
-  + strategy + risk limits) but the glue (`paper_trade.py`) is not built.
 - **No logit-space market maker** (docs §5) — the AS variant for prices
   near `{0, 1}`. Use AS only on mid-range markets until this is built.
 
@@ -116,6 +123,24 @@ timestamp shuffle (which is the *expected* failure mode). It currently
 runs on synthetic data; point it at your real captures for the
 final go-live decision.
 
+### 5. Paper-trade against the live feed
+
+```bash
+python scripts/paper_trade.py \
+    --config configs/example.yaml \
+    --log-root data/paper/ \
+    --latency-ms 50 \
+    [--params my_params.json]
+```
+
+Subscribes to the live Polymarket market channel for the configured
+token id, runs the strategy locally, and simulates fills when public
+trades hit our resting price levels. No orders are sent to Polymarket.
+The `KillSwitch` halts the runner on drawdown / heartbeat-timeout /
+daily-loss breach; the full audit trail (every event, place, cancel,
+fill, halt, PnL snapshot) is appended to
+`{log-root}/{YYYY-MM-DD UTC}/{token_id}.jsonl`. Stop with Ctrl-C.
+
 ## Running tests
 
 ```bash
@@ -133,14 +158,17 @@ ruff format --check src tests scripts
 - [x] Phase 4 — Signals: OFI + microprice + VPIN
 - [x] Phase 5 — Event-driven: Hawkes + scheduled-jump withdraw
 - [x] Phase 6 — Validation: CPCV + DSR + PBO + delay/shuffle
-- [ ] Phase 7 — Paper trading (user responsibility)
-- [ ] Phase 8 — Tiny live (user responsibility)
+- [x] Tier 1 — Risk + config + calibrate / backtest CLIs
+- [x] Tier 2 — Paper-trade runner: live WS + simulated fills + JSONL log
+- [ ] Phase 7 — Actually run paper-trade on a real market for an
+      extended period and analyse the result (user responsibility)
+- [ ] Phase 8 — Tiny live via `live/client_v2.py` (not yet built)
 
 ## Numbers (current state)
 
-- 184 tests passing (175 unit + 5 phase-3-5 integration + 4 phase-6
+- 190 tests passing (183 unit + 3 phase-3-5 integration + 4 phase-6
   integration); unit-test suite runs in ~3 s.
-- `ruff check`: All checks passed.
+- `ruff check`: All checks passed. `ruff format --check`: clean.
 - Verified WebSocket client on a 40-min live capture of the Pistons vs.
   Cavaliers market (vol24h $4.8M): median latency 52 ms, matches spec.
 - Phase 6 acceptance passes on synthetic data: PBO ≈ 0, DSR > 0.99,
