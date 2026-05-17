@@ -1,4 +1,0 @@
-2026-05-17 13:19:13,656 INFO hft_pm.live.paper_trade ws (re)subscribed
-2026-05-17 16:09:27,380 WARNING hft_pm.live.paper_trade ws disconnect: heartbeat timeout (silent freeze)
-2026-05-17 16:09:27,774 WARNING hft_pm.live.paper_trade ws disconnect: connection lost: sent 1000 (OK); no close frame received
-2026-05-17 16:09:27,775 INFO hft_pm.live.paper_trade paper trader exited: pnl=0.0000 fills=0 fees=0.0000 rebates=0.0000 halted=True reason=heartbeat_timeout

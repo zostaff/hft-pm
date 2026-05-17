@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 /data/
+/logs/
 *.parquet
 *.jsonl
 .coverage
