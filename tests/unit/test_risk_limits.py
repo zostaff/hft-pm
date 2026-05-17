@@ -74,6 +74,26 @@ def test_heartbeat_noop_before_first_tick() -> None:
     assert sw.halted is False
 
 
+def test_note_ws_message_keeps_heartbeat_fresh_without_pnl_tick() -> None:
+    """`note_ws_message` is the WS-liveness ping that runs on every raw
+    message including foreign-asset ones. It must defer the heartbeat
+    halt without touching PnL/inventory state, so a low-volume token
+    paired with a busy multi-token WS doesn't trip the kill switch."""
+    sw = KillSwitch(RiskLimits(heartbeat_timeout_s=5.0))
+    # Bootstrap _last_event_s with a tick (an own-asset event).
+    sw.tick(now_s=1000, current_pnl=0, inventory=0)
+    # Lots of foreign-asset messages over the next 10 s — far past the
+    # 5 s heartbeat timeout — but `note_ws_message` keeps refreshing.
+    for t in range(1001, 1011):
+        sw.note_ws_message(now_s=float(t))
+        sw.heartbeat_check(now_s=float(t))
+        assert sw.halted is False, f"tripped at t={t}"
+    # The moment WS goes silent, heartbeat starts counting again.
+    sw.heartbeat_check(now_s=1016.0)  # 6 s since last note
+    assert sw.halted is True
+    assert sw.halt_reason == HaltReason.HEARTBEAT_TIMEOUT
+
+
 # ----------------------------------------------------------------------
 # Inventory cap
 # ----------------------------------------------------------------------

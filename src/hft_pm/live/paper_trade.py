@@ -190,6 +190,11 @@ class PaperTrader(SimulatorAPI):
 
         self._client: PolymarketWSClient | None = None
         self._stop = False
+        # _on_halt is idempotent: cleanup runs once, then subsequent calls
+        # just re-assert client.stop() without re-logging. This prevents the
+        # log spam observed on 2026-05-17 when a slow market plus a flawed
+        # heartbeat semantics produced 35 halt records over 2.5 hours.
+        self._halt_logged: bool = False
 
     # ------------------------------------------------------------------
     # SimulatorAPI surface
@@ -293,6 +298,14 @@ class PaperTrader(SimulatorAPI):
     # ------------------------------------------------------------------
 
     async def _on_ws_event(self, raw: dict[str, Any], recv_ts_ms: int) -> None:
+        # Update WS-liveness heartbeat on EVERY raw message, before any
+        # filtering. The kill-switch heartbeat-timeout halt means "feed is
+        # dead", not "my own token went quiet" — a low-volume token can
+        # legitimately have hours between trades while the WS itself is
+        # streaming healthily for other assets the runner doesn't trade.
+        # See risk.limits.KillSwitch.note_ws_message for the rationale.
+        self._kill_switch.note_ws_message(now_s=time.time())
+
         # Filter foreign assets and control messages without asset_id.
         if raw.get("asset_id") != self._token_id:
             return
@@ -526,23 +539,17 @@ class PaperTrader(SimulatorAPI):
                 return
 
     def _on_halt(self) -> None:
-        """Cancel local resting orders, log, and signal the WS client to stop.
+        """Cancel local resting orders, log once, and signal the WS client to stop.
 
-        Idempotent: subsequent calls do nothing because ``_our_order_ids``
-        is already empty.
+        Idempotent. The first call cleans up state and writes a single
+        ``halt`` record. Subsequent calls only re-assert ``client.stop()`` —
+        no log spam, no redundant cleanup. This matters in practice because
+        ``_on_halt`` can be re-entered both from :meth:`_heartbeat_loop`
+        (periodic tick) and from :meth:`_process_market_event` (a new event
+        arrived after halt while the WS was being closed), and on a live
+        feed those re-entries can fire dozens of times within a second.
         """
-        if not self._our_order_ids and not self._pending_places and not self._pending_arrivals:
-            # Already halted and cleaned up; just stop the client and return.
-            self._log(
-                {
-                    "type": "halt",
-                    "ts_ms": self._now_ms,
-                    "reason": self._kill_switch.halt_reason.value,
-                    "pnl": mark_to_mid(self._cash, self._inventory, self._last_mid),
-                    "inventory": self._inventory,
-                    "repeat": True,
-                }
-            )
+        if self._halt_logged:
             if self._client is not None:
                 self._client.stop()
             return
@@ -565,6 +572,8 @@ class PaperTrader(SimulatorAPI):
                 "rebates_received": self._rebates_received,
             }
         )
+        self._halt_logged = True
+
         if self._client is not None:
             self._client.stop()
 

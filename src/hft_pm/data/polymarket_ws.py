@@ -113,6 +113,10 @@ class PolymarketWSClient:
         self.last_msg_ts: float = 0.0
         self.last_hash_by_asset: dict[str, str] = {}
         self._stop = False
+        # Reference to the currently-active WS so :meth:`stop` can force a
+        # close from outside the read loop. Set inside :meth:`run`, cleared
+        # when the read loop exits.
+        self._current_ws: _WSLike | None = None
 
     async def run(self) -> None:
         """Main loop. Reconnects forever with exponential backoff until :meth:`stop`."""
@@ -120,9 +124,13 @@ class PolymarketWSClient:
         while not self._stop:
             try:
                 async with self._connector(self._url) as ws:
-                    await self._subscribe(ws)
-                    backoff = self.INITIAL_BACKOFF_S  # reset on successful subscribe
-                    await self._read_loop(ws)
+                    self._current_ws = ws
+                    try:
+                        await self._subscribe(ws)
+                        backoff = self.INITIAL_BACKOFF_S  # reset on successful subscribe
+                        await self._read_loop(ws)
+                    finally:
+                        self._current_ws = None
             except (TimeoutError, websockets.ConnectionClosed, OSError) as e:
                 await self.on_disconnect(f"connection lost: {e}")
             except Exception as e:
@@ -180,8 +188,35 @@ class PolymarketWSClient:
         await self.on_event(ev, recv_ts)
 
     def stop(self) -> None:
-        """Request shutdown after the next read iteration."""
+        """Request shutdown and force-close the active connection if any.
+
+        Setting ``_stop`` is not enough on its own: the read loop sits in
+        ``async for raw in ws`` which only yields when a message arrives,
+        the connection closes, or the transport-level keepalive timer
+        fires (10-15 s). On a healthy, message-streaming WS that can be
+        many seconds — enough for an upstream halt (drawdown, daily-loss,
+        heartbeat) to keep handling events after we wanted to be gone.
+
+        Scheduling ``ws.close()`` on the running loop makes the read loop
+        exit on the next iteration. Best-effort: if we're not currently
+        inside a running event loop (e.g. called from a synchronous test
+        teardown), we silently fall back to the flag-only behaviour and
+        the outer reconnect loop will exit at the next backoff tick.
+        """
         self._stop = True
+        ws = self._current_ws
+        if ws is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        # The task is fire-and-forget by design: we want the close to start
+        # promptly so the read loop's ``async for`` exits, but we don't have
+        # a meaningful way to await it from this sync context. Hold a ref
+        # on the client to silence RUF006 — the task is GC-rooted until it
+        # completes, then GC'd along with self._close_task.
+        self._close_task = loop.create_task(ws.close())
 
 
 def _build_cli_parser() -> Any:

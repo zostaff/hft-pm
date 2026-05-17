@@ -139,6 +139,24 @@ class KillSwitch:
             self._trip(HaltReason.DAILY_LOSS)
             return
 
+    def note_ws_message(self, *, now_s: float) -> None:
+        """Lightweight WS-liveness heartbeat — call on every raw WS message,
+        including those for foreign assets that the strategy does not trade.
+
+        The kill-switch heartbeat is about "is the data feed alive", not "is
+        my own token actively trading". On a low-volume token (e.g. a long-
+        dated futures market on a quiet weekend) hours can pass between
+        trades on the strategy's own asset while the WS itself is healthy
+        and streaming events for other tokens. Without :meth:`note_ws_message`
+        the runner conflates the two and trips :attr:`HaltReason.HEARTBEAT_TIMEOUT`
+        for what is in fact a perfectly healthy feed.
+
+        The paper / live runner is expected to call this BEFORE applying any
+        asset-id filter; :meth:`tick` should still be called only for the
+        strategy's own asset events because it also updates PnL state.
+        """
+        self._last_event_s = now_s
+
     def heartbeat_check(self, *, now_s: float) -> None:
         """Call from a watchdog timer to detect a frozen feed."""
         if self._last_event_s is None:

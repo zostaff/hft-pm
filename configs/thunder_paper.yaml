@@ -1,0 +1,24 @@
+# Paper-trade config: Thunder NBA Finals YES token (2026-05-17 snapshot).
+# Strategy: ConstantSpread baseline — outperformed AS-with-signals on the
+# 2026-05-16 Pistons real-data backtest (+$0.088 vs -$1.08), so we test
+# it live first. AS variant deferred until we have more captures + a
+# real-data calibration that doesn't put us systematically short on
+# trending sports markets.
+
+market:
+  token_id: "49500299856831034491021962156746701298730459370557900271970866855042624695770"
+  fee_category: SPORTS
+  tick: 0.01
+
+strategy:
+  kind: constant_spread
+  params:
+    half_spread: 0.01     # 1 tick from mid
+    size: 1
+
+risk:
+  max_drawdown_pct: 0.20
+  max_inventory: 50
+  heartbeat_timeout_s: 30
+  daily_loss_limit: 25
+  baseline_capital: 100

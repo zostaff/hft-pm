@@ -456,3 +456,227 @@ async def test_foreign_asset_events_are_ignored(tmp_path: Path) -> None:
     # Only the trade event for ASSET should have produced a pnl snapshot.
     pnls = [r for r in log if r["type"] == "pnl"]
     assert len(pnls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for bugs found during 2026-05-17 live paper-trade
+# ---------------------------------------------------------------------------
+
+
+class _StreamingFakeWS:
+    """``_WSLike`` that streams a single canned payload at a steady cadence
+    until :meth:`close` is called, with no natural end.
+
+    The :class:`_FakeWS` used by the burst tests exits as soon as its
+    scripted list is exhausted, which masks two bugs we hit on a real WS:
+    (a) ``stop()`` doesn't actually break ``async for raw in ws`` and
+    (b) ``_on_halt`` re-fires on every event after the halt. This streaming
+    variant exposes both.
+    """
+
+    def __init__(self, payload: str, *, cadence_s: float = 0.005) -> None:
+        self._payload = payload
+        self._cadence_s = cadence_s
+        self._closed = False
+
+    async def send(self, _data: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        self._closed = True
+
+    def __aiter__(self) -> _StreamingFakeWS:
+        return self
+
+    async def __anext__(self) -> str:
+        await asyncio.sleep(self._cadence_s)
+        if self._closed:
+            raise StopAsyncIteration
+        return self._payload
+
+
+class _StreamingConnector:
+    def __init__(self, payload: dict[str, Any], *, cadence_s: float = 0.005) -> None:
+        self._payload_str = json.dumps(payload)
+        self._cadence_s = cadence_s
+        self.connections: list[_StreamingFakeWS] = []
+
+    def __call__(self, _url: str) -> _StreamingCM:
+        return _StreamingCM(self)
+
+
+class _StreamingCM:
+    def __init__(self, parent: _StreamingConnector) -> None:
+        self._parent = parent
+
+    async def __aenter__(self) -> _StreamingFakeWS:
+        ws = _StreamingFakeWS(self._parent._payload_str, cadence_s=self._parent._cadence_s)
+        self._parent.connections.append(ws)
+        return ws
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+async def test_foreign_asset_traffic_does_not_trip_kill_switch_heartbeat(
+    tmp_path: Path,
+) -> None:
+    """Regression: 2026-05-17 paper-trade on Thunder NBA halted within 30 s
+    because the kill-switch heartbeat was tracking events on the strategy's
+    own token only. Foreign-asset events flowing steadily on the same WS
+    must keep ``KillSwitch._last_event_s`` fresh — otherwise a low-volume
+    market is unusable for paper trading even when the WS itself is healthy.
+    """
+    # Stream foreign-asset events at ~200 / sec for the full test duration.
+    foreign = {**_book_event(1000, [(0.5, 100.0)], [(0.51, 100.0)]), "asset_id": "OTHER"}
+    connector = _StreamingConnector(foreign, cadence_s=0.005)
+
+    # Heartbeat timeout 0.2 s but we'll let the test run for 0.8 s: with the
+    # bug fixed the switch must NOT trip; with the bug, it trips ~0.2 s in.
+    ks = KillSwitch(RiskLimits(heartbeat_timeout_s=0.2))
+    trader = PaperTrader(
+        token_id=ASSET,
+        tick=0.01,
+        fee_category=FeeCategory.GEOPOLITICS,
+        strategy=DoNothing(),
+        kill_switch=ks,
+        latency=ConstantLatency(0),
+        log_path=tmp_path / "paper.jsonl",
+        connector=connector,
+        ws_url="ws://test",
+        heartbeat_check_interval_s=0.05,
+    )
+
+    task = asyncio.create_task(trader.run())
+    try:
+        await asyncio.sleep(0.8)  # well past 0.2 s heartbeat_timeout
+        assert ks.halted is False, "heartbeat tripped despite live foreign-asset traffic"
+    finally:
+        trader.stop()
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except TimeoutError:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            raise
+
+
+async def test_stop_force_closes_active_streaming_ws(tmp_path: Path) -> None:
+    """Regression: 2026-05-17 paper-trade stayed in ``async for raw in ws``
+    for 2.5 hours after a halt because ``client.stop()`` set a flag but did
+    not close the live WS. With the fix, ``stop()`` must terminate the
+    runner promptly even on a continuously-streaming feed.
+    """
+    foreign = {**_book_event(1000, [(0.5, 100.0)], [(0.51, 100.0)]), "asset_id": "OTHER"}
+    connector = _StreamingConnector(foreign, cadence_s=0.005)
+    trader = PaperTrader(
+        token_id=ASSET,
+        tick=0.01,
+        fee_category=FeeCategory.GEOPOLITICS,
+        strategy=DoNothing(),
+        kill_switch=KillSwitch(RiskLimits()),
+        latency=ConstantLatency(0),
+        log_path=tmp_path / "paper.jsonl",
+        connector=connector,
+        ws_url="ws://test",
+        heartbeat_check_interval_s=10.0,
+    )
+
+    task = asyncio.create_task(trader.run())
+    await asyncio.sleep(0.1)  # let the stream settle
+    trader.stop()
+    # Must exit within 0.5 s. Pre-fix this hung until WS naturally closed.
+    await asyncio.wait_for(task, timeout=0.5)
+
+
+async def test_halt_logs_only_once_under_continued_traffic(tmp_path: Path) -> None:
+    """Regression: 2026-05-17 paper-trade wrote 35 halt records because every
+    post-halt event re-entered ``_on_halt`` and the "already cleaned up"
+    branch always re-logged with ``"repeat": True``. Exactly one halt record
+    must be emitted regardless of how many events arrive after the trip.
+    """
+    # First event on our asset triggers halt (via _HaltAfterNTicks).
+    # Then stream foreign events that, before the fix, would each cause a
+    # repeat halt log via _process_market_event re-entering _on_halt.
+    own_event = _book_event(1000, [(0.48, 50.0)], [(0.51, 100.0)])
+    foreign = {**_book_event(2000, [(0.5, 100.0)], [(0.51, 100.0)]), "asset_id": "OTHER"}
+
+    class _DualConnector:
+        """One own-asset event + sustained foreign-asset stream on the same WS."""
+
+        def __init__(self) -> None:
+            self.connections: list[Any] = []
+
+        def __call__(self, _url: str) -> _DualConnectorCM:
+            return _DualConnectorCM(self)
+
+    class _DualConnectorCM:
+        def __init__(self, parent: _DualConnector) -> None:
+            self._parent = parent
+
+        async def __aenter__(self) -> _DualWS:
+            ws = _DualWS(json.dumps(own_event), json.dumps(foreign))
+            self._parent.connections.append(ws)
+            return ws
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    class _DualWS:
+        def __init__(self, own: str, foreign: str) -> None:
+            self._own = own
+            self._foreign = foreign
+            self._sent_own = False
+            self._closed = False
+
+        async def send(self, _data: str) -> None:
+            return None
+
+        async def close(self) -> None:
+            self._closed = True
+
+        def __aiter__(self) -> _DualWS:
+            return self
+
+        async def __anext__(self) -> str:
+            await asyncio.sleep(0.005)
+            if self._closed:
+                raise StopAsyncIteration
+            if not self._sent_own:
+                self._sent_own = True
+                return self._own
+            return self._foreign
+
+    connector = _DualConnector()
+    ks = _HaltAfterNTicks(RiskLimits(), trip_after=1)  # halt on the first own-asset tick
+    trader = PaperTrader(
+        token_id=ASSET,
+        tick=0.01,
+        fee_category=FeeCategory.GEOPOLITICS,
+        strategy=DoNothing(),
+        kill_switch=ks,
+        latency=ConstantLatency(0),
+        log_path=tmp_path / "paper.jsonl",
+        connector=connector,
+        ws_url="ws://test",
+        heartbeat_check_interval_s=10.0,
+    )
+
+    task = asyncio.create_task(trader.run())
+    try:
+        # Let foreign events stream after the halt. Pre-fix each one
+        # re-entered _on_halt and wrote a repeat record; we expect the run
+        # to terminate quickly (because stop() now force-closes the WS).
+        await asyncio.wait_for(task, timeout=1.5)
+    except TimeoutError:
+        trader.stop()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        raise
+
+    log = _read_log(tmp_path / "paper.jsonl")
+    halts = [r for r in log if r["type"] == "halt"]
+    assert len(halts) == 1, f"expected exactly 1 halt record, got {len(halts)}: {halts}"
+    assert "repeat" not in halts[0], "no record should carry the legacy 'repeat' flag"
