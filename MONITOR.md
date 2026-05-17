@@ -1,6 +1,6 @@
 # Background processes — quick reference
 
-Started 2026-05-17 UTC. Both processes write JSONL under `data/`, partitioned by UTC date.
+Capture started 2026-05-17 UTC (still running). Paper-trade was restarted 2026-05-18 UTC after fixing three live-bugs found on the first run — see commit 9c07c87 + `tests/unit/test_paper_trade.py` regression tests `test_foreign_asset_traffic_does_not_trip_kill_switch_heartbeat`, `test_stop_force_closes_active_streaming_ws`, `test_halt_logs_only_once_under_continued_traffic`. Both processes write JSONL under `data/`, partitioned by UTC date.
 
 ## What's running
 

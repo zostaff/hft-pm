@@ -19,6 +19,14 @@ strategy:
 risk:
   max_drawdown_pct: 0.20
   max_inventory: 50
-  heartbeat_timeout_s: 30
+  # 30 s is fine for multi-token captures (any of N busy tokens keeps the
+  # feed alive), but paper-trade subscribes to ONE token. On a quiet
+  # market like an NBA Finals futures contract over a weekend, the
+  # token can legitimately go several minutes without any event while
+  # the WS itself is healthy (TCP keepalive + websockets ping/pong
+  # already cover protocol-level death). 300 s gives slow markets room
+  # to breathe; truly-dead WS still gets caught by the library's
+  # built-in ping_timeout=10 s setting.
+  heartbeat_timeout_s: 300
   daily_loss_limit: 25
   baseline_capital: 100
