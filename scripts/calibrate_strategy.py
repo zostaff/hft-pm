@@ -198,6 +198,38 @@ def main() -> None:
         book_obs, window_s=args.ofi_window_s, horizon_s=args.ofi_horizon_s
     )
 
+    warnings: list[str] = []
+    # Thresholds are pragmatic: hft-pm's 2026-05-17 Thunder NBA capture had
+    # n_book=193, n_trade=91 over 11 h and produced sigma=0 (mid stuck),
+    # which crashed AvellanedaStoikov on the next backtest. Captures around
+    # 500 book + 200 trade events give barely-usable params (R^2 ≈ 0);
+    # below ~200/100 the estimator collapses regularly. The numbers are
+    # warnings, not errors — calibration still writes the JSON so a
+    # downstream consumer (merge_calibrated_params) can apply its own
+    # safeguards (non-positive sigma/kappa rejected).
+    if len(book_obs) < 500:
+        warnings.append(
+            f"n_book_events={len(book_obs)} < 500: sigma and kappa estimates may be "
+            "unstable; consider a longer capture window"
+        )
+    if len(trades) < 200:
+        warnings.append(
+            f"n_trade_events={len(trades)} < 200: kappa and A estimates may be unstable"
+        )
+    if sigma <= 0:
+        warnings.append(
+            f"sigma_per_sqrts={sigma} ≤ 0: the mid likely never moved during the "
+            "capture; downstream backtests using this value will reject it and "
+            "fall back to the YAML default"
+        )
+    if kappa <= 0:
+        warnings.append(f"kappa={kappa} ≤ 0: no trades observed at non-zero depth from mid")
+    if abs(ofi_fit["r2"]) < 0.005:
+        warnings.append(
+            f"alpha_beta R²={ofi_fit['r2']:.4f}: OFI has effectively zero predictive "
+            "power on this capture; alpha_beta is noise"
+        )
+
     result: dict[str, Any] = {
         "asset_id": args.asset,
         "date": str(day),
@@ -211,6 +243,7 @@ def main() -> None:
         "alpha_beta_n_samples": ofi_fit["n_samples"],
         "alpha_beta_window_s": args.ofi_window_s,
         "alpha_beta_horizon_s": args.ofi_horizon_s,
+        "calibration_warnings": warnings,
     }
 
     out_path = Path(args.out)
@@ -219,6 +252,8 @@ def main() -> None:
         json.dump(result, fh, indent=2)
 
     print(json.dumps(result, indent=2))
+    for w in warnings:
+        print(f"WARNING: {w}", file=sys.stderr)
 
 
 if __name__ == "__main__":

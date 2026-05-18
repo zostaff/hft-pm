@@ -677,49 +677,6 @@ def _crosses_spread(book: L2OrderBook, side: Side, price: float) -> bool:
 # ----------------------------------------------------------------------
 
 
-# Same parameter mapping as scripts/run_backtest._merge_calibrated_params.
-# Kept here so the live runner does not depend on the scripts/ directory.
-_PARAMS_BY_STRATEGY: dict[str, set[str]] = {
-    "constant_spread": {"half_spread", "size", "tick"},
-    "avellaneda_stoikov": {"gamma", "sigma", "kappa", "horizon_ms", "size"},
-    "avellaneda_stoikov_with_signals": {
-        "gamma",
-        "sigma",
-        "kappa",
-        "horizon_ms",
-        "size",
-        "use_microprice",
-        "alpha_beta",
-        "ofi_window_s",
-        "vpin_bucket_volume",
-        "vpin_n_buckets",
-        "vpin_max",
-        "jump_schedule_ms",
-        "pre_jump_withdraw_ms",
-        "post_jump_resume_ms",
-    },
-    "glt": {"gamma", "sigma", "kappa", "A", "size"},
-}
-
-
-def _merge_calibrated_params(
-    strategy_kind: str, strategy_params: dict[str, Any], calibrated: dict[str, Any]
-) -> dict[str, Any]:
-    """Map calibrated keys onto strategy parameter names, filtered by kind."""
-    allowed = _PARAMS_BY_STRATEGY.get(strategy_kind, set())
-    out = dict(strategy_params)
-    mapping = {
-        "sigma_per_sqrts": "sigma",
-        "kappa": "kappa",
-        "A_per_side": "A",
-        "alpha_beta": "alpha_beta",
-    }
-    for src, dst in mapping.items():
-        if src in calibrated and dst in allowed:
-            out[dst] = calibrated[src]
-    return out
-
-
 def _default_log_path(root: Path, token_id: str) -> Path:
     """``{root}/{YYYY-MM-DD UTC}/{token_id}.jsonl`` — partitioning mirrors the WS capture writer."""
     from datetime import UTC, datetime
@@ -737,13 +694,13 @@ async def _run_cli(
     """Wire AppConfig + KillSwitch + strategy + PaperTrader and run forever."""
     from ..config import load_config
     from ..simulator.latency import ConstantLatency
-    from ..strategies.factory import build_strategy
+    from ..strategies.factory import build_strategy, merge_calibrated_params
 
     cfg = load_config(config_path)
     strat_params = dict(cfg.strategy.params)
     if params_path is not None:
         calibrated = json.loads(params_path.read_text())
-        strat_params = _merge_calibrated_params(cfg.strategy.kind, strat_params, calibrated)
+        strat_params = merge_calibrated_params(cfg.strategy.kind, strat_params, calibrated)
 
     strategy = build_strategy(cfg.strategy.kind, strat_params)
     kill_switch = KillSwitch(cfg.risk.to_limits())

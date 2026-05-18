@@ -36,7 +36,7 @@ from hft_pm.orderbook.l2_book import L2OrderBook  # noqa: E402
 from hft_pm.risk.limits import KillSwitch  # noqa: E402
 from hft_pm.simulator.engine import Backtester  # noqa: E402
 from hft_pm.simulator.latency import ConstantLatency  # noqa: E402
-from hft_pm.strategies.factory import build_strategy  # noqa: E402
+from hft_pm.strategies.factory import build_strategy, merge_calibrated_params  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -70,45 +70,9 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-_PARAMS_BY_STRATEGY: dict[str, set[str]] = {
-    "constant_spread": {"half_spread", "size", "tick"},
-    "avellaneda_stoikov": {"gamma", "sigma", "kappa", "horizon_ms", "size"},
-    "avellaneda_stoikov_with_signals": {
-        "gamma",
-        "sigma",
-        "kappa",
-        "horizon_ms",
-        "size",
-        "use_microprice",
-        "alpha_beta",
-        "ofi_window_s",
-        "vpin_bucket_volume",
-        "vpin_n_buckets",
-        "vpin_max",
-        "jump_schedule_ms",
-        "pre_jump_withdraw_ms",
-        "post_jump_resume_ms",
-    },
-    "glt": {"gamma", "sigma", "kappa", "A", "size"},
-}
-
-
-def _merge_calibrated_params(strategy_kind: str, strategy_params: dict, calibrated: dict) -> dict:
-    """Map calibrated keys (sigma_per_sqrts, kappa, A_per_side, alpha_beta) into
-    the strategy parameter names the factory expects, filtering by what the
-    target strategy actually accepts."""
-    allowed = _PARAMS_BY_STRATEGY.get(strategy_kind, set())
-    out = dict(strategy_params)
-    mapping = {
-        "sigma_per_sqrts": "sigma",
-        "kappa": "kappa",
-        "A_per_side": "A",
-        "alpha_beta": "alpha_beta",
-    }
-    for src, dst in mapping.items():
-        if src in calibrated and dst in allowed:
-            out[dst] = calibrated[src]
-    return out
+# merge_calibrated_params lives in hft_pm.strategies.factory so the paper-trade
+# runner and any future live runner all apply the same calibration→strategy
+# mapping plus the same sanity guards (non-positive sigma/kappa rejected).
 
 
 def _summarise(result, kill_switch: KillSwitch) -> dict[str, Any]:
@@ -147,7 +111,7 @@ def main() -> None:
     strat_params = cfg.strategy.params
     if args.params:
         calibrated = json.loads(Path(args.params).read_text())
-        strat_params = _merge_calibrated_params(cfg.strategy.kind, strat_params, calibrated)
+        strat_params = merge_calibrated_params(cfg.strategy.kind, strat_params, calibrated)
 
     strategy = build_strategy(cfg.strategy.kind, strat_params)
 
