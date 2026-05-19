@@ -19,14 +19,15 @@ strategy:
 risk:
   max_drawdown_pct: 0.20
   max_inventory: 50
-  # 30 s is fine for multi-token captures (any of N busy tokens keeps the
-  # feed alive), but paper-trade subscribes to ONE token. On a quiet
-  # market like an NBA Finals futures contract over a weekend, the
-  # token can legitimately go several minutes without any event while
-  # the WS itself is healthy (TCP keepalive + websockets ping/pong
-  # already cover protocol-level death). 300 s gives slow markets room
-  # to breathe; truly-dead WS still gets caught by the library's
-  # built-in ping_timeout=10 s setting.
-  heartbeat_timeout_s: 300
+  # 30 s default is for multi-token captures (any of N busy tokens
+  # keeps the feed alive). Paper-trade subscribes to ONE token, so the
+  # kill-switch heartbeat halts the runner whenever the strategy's own
+  # token is quiet — even if the underlying WS is healthy. 300 s was
+  # not enough either: the 2026-05-18 Thunder run lived 8h44m before
+  # finally tripping during a 5-minute Thunder gap. 1800 s (30 min)
+  # is the third attempt; truly-dead WS connections are still caught
+  # promptly by the websockets library's ping_interval=15 /
+  # ping_timeout=10, which fires regardless of message flow.
+  heartbeat_timeout_s: 1800
   daily_loss_limit: 25
   baseline_capital: 100
