@@ -160,17 +160,51 @@ ruff format --check src tests scripts
 - [x] Phase 6 — Validation: CPCV + DSR + PBO + delay/shuffle
 - [x] Tier 1 — Risk + config + calibrate / backtest CLIs
 - [x] Tier 2 — Paper-trade runner: live WS + simulated fills + JSONL log
-- [ ] Phase 7 — Actually run paper-trade on a real market for an
-      extended period and analyse the result (user responsibility)
+- [x] **Phase 7 (partial)** — Six days of live captures (2026-05-16 → 22) on
+      8 tokens, calibrated + backtested. See [`docs/results_real_data.md`](docs/results_real_data.md).
+- [ ] Phase 6 on real data — the CPCV + DSR + PBO pipeline still needs to be
+      run over real-data folds rather than synthetic. Backtests done so far
+      are single-day, not statistical.
 - [ ] Phase 8 — Tiny live via `live/client_v2.py` (not yet built)
+
+## Real-data findings (2026-05-22)
+
+The full results are in [`docs/results_real_data.md`](docs/results_real_data.md).
+TL;DR from the richest single-day backtest (Spurs YES NBA Finals,
+3 251 trade events on 2026-05-21):
+
+| strategy | PnL ($) | fills | max DD ($) | Sharpe / event |
+|---|---:|---:|---:|---:|
+| **ConstantSpread** | **+0.308** | 19 | 0.236 | +0.0097 |
+| **GLT**            | **+0.305** | 22 | 0.236 | +0.0095 |
+| Avellaneda-Stoikov | +0.172     | 13 | 0.118 | +0.0108 |
+| AS + signals       | +0.004     |  5 | 0.038 | +0.0020 |
+
+Three things worth knowing before extending this work:
+
+1. **Symmetric quoters (CS / GLT) outperform AS on absolute PnL** by ~75 %
+   on this data. AS plain has the best Sharpe-per-event but the smallest
+   dollar PnL — its inventory-skew term degenerates because calibrated
+   σ ≈ 1.6 · 10⁻⁴ makes both the spread component and the skew smaller
+   than the 0.001 minimum tick, so quotes snap symmetrically anyway.
+2. **The OFI signal is real but small** (R² ≈ 0.10 on the best market /
+   day) and the calibrated coefficient came out **negative** —
+   aggressive buying predicts mean-reversion, not momentum. The
+   AS-with-signals microprice-shift framework cannot extract value
+   from this signal on real PM data; an OFI-driven *spread-widening*
+   overlay on CS would be a more promising architecture.
+3. **Calibration needs a busy market**. Five of the six market × day
+   combinations we captured produced warnings from
+   `scripts/calibrate_strategy.py` (low sample count, σ = 0, near-zero
+   R²). The Spurs NBA Finals game day was the only clean calibration.
 
 ## Numbers (current state)
 
-- 190 tests passing (183 unit + 3 phase-3-5 integration + 4 phase-6
+- 200 tests passing (193 unit + 3 phase-3-5 integration + 4 phase-6
   integration); unit-test suite runs in ~3 s.
 - `ruff check`: All checks passed. `ruff format --check`: clean.
-- Verified WebSocket client on a 40-min live capture of the Pistons vs.
-  Cavaliers market (vol24h $4.8M): median latency 52 ms, matches spec.
+- WebSocket client survived a 6-day continuous capture (2026-05-16 → 22)
+  with auto-reconnect; median latency 52 ms.
 - Phase 6 acceptance passes on synthetic data: PBO ≈ 0, DSR > 0.99,
   Sharpe robust to +100/+500/+2000ms delays, Sharpe collapses under
-  timestamp shuffle.
+  timestamp shuffle. **The suite has not yet been run on real-data folds.**
