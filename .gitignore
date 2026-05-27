@@ -7,6 +7,17 @@ __pycache__/
 .mypy_cache/
 /data/
 /logs/
+
+# Private alpha work — NEVER push these to the public repo.
+# The public hft-pm repo at github.com/zostaff/hft-pm is the educational
+# framework; signal-extracting strategies, calibrated configs that point
+# at specific tokens, and alpha research notes live below private/ in
+# each of these top-level dirs and are not tracked by git.
+/src/hft_pm/strategies/private/
+/configs/private/
+/tests/private/
+/docs/private/
+/scripts/private/
 *.parquet
 *.jsonl
 .coverage
