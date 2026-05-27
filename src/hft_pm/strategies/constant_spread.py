@@ -3,6 +3,12 @@
 Quotes ``bid = mid − δ`` and ``ask = mid + δ`` for a fixed half-spread δ,
 ignoring inventory entirely. Used as the Phase 3 baseline against which
 AS / GLT must demonstrate a Sharpe improvement.
+
+Note: when ``tick > σ√T`` the closed-form AS half-spread collapses
+below one tick and the Avellaneda-Stoikov quoter degenerates to this
+strategy on the post-rounding grid. The Phase 3 acceptance test thus
+implicitly checks whether the non-degenerate AS regime exists in the
+captured data at all. Find your own data and decide for yourself.
 """
 
 from __future__ import annotations

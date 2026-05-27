@@ -1,12 +1,10 @@
-# Paper-trade config: Thunder NBA Finals YES token (2026-05-17 snapshot).
-# Strategy: ConstantSpread baseline — outperformed AS-with-signals on the
-# 2026-05-16 Pistons real-data backtest (+$0.088 vs -$1.08), so we test
-# it live first. AS variant deferred until we have more captures + a
-# real-data calibration that doesn't put us systematically short on
-# trending sports markets.
+# Example paper-trade config: single-token feed on a mid-priced sports market.
+# Replace the token_id with your own; the rest stays the same for a typical
+# 0.01-tick Polymarket sports book. Strategy is the ConstantSpread baseline
+# because it's the most defensible thing to live-paper before you calibrate.
 
 market:
-  token_id: "49500299856831034491021962156746701298730459370557900271970866855042624695770"
+  token_id: "REPLACE_WITH_YOUR_TOKEN_ID"
   fee_category: SPORTS
   tick: 0.01
 
@@ -19,15 +17,12 @@ strategy:
 risk:
   max_drawdown_pct: 0.20
   max_inventory: 50
-  # 30 s default is for multi-token captures (any of N busy tokens
-  # keeps the feed alive). Paper-trade subscribes to ONE token, so the
-  # kill-switch heartbeat halts the runner whenever the strategy's own
-  # token is quiet — even if the underlying WS is healthy. 300 s was
-  # not enough either: the 2026-05-18 Thunder run lived 8h44m before
-  # finally tripping during a 5-minute Thunder gap. 1800 s (30 min)
-  # is the third attempt; truly-dead WS connections are still caught
-  # promptly by the websockets library's ping_interval=15 /
-  # ping_timeout=10, which fires regardless of message flow.
+  # 30 s default fits multi-token capture (any of N busy tokens keeps the
+  # feed alive). Paper-trade subscribes to ONE token, so the kill-switch
+  # heartbeat halts the runner whenever the strategy's own token is quiet
+  # — even if the underlying WS is healthy. Tune up for low-velocity
+  # markets; truly-dead WS still gets caught by the websockets library's
+  # ping_interval=15 / ping_timeout=10, which fires regardless of flow.
   heartbeat_timeout_s: 1800
   daily_loss_limit: 25
   baseline_capital: 100
